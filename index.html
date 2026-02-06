@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台灣股票報告</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .search-box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .search-box input {
+            padding: 10px 15px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 200px;
+        }
+        .search-box button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .search-box button:hover { background: #0056b3; }
+        .search-box button:disabled { background: #ccc; cursor: not-allowed; }
+        .loading { text-align: center; padding: 40px; color: #666; }
+        .error { background: #fee; color: #c00; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+        .status { margin-left: 10px; color: #666; font-size: 14px; }
+        .report {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .report h1 { font-size: 24px; margin-bottom: 5px; color: #333; }
+        .report .subtitle { color: #666; margin-bottom: 20px; }
+        .report h2 {
+            font-size: 18px;
+            margin: 20px 0 10px 0;
+            padding-bottom: 5px;
+            border-bottom: 2px solid #007bff;
+            color: #333;
+        }
+        .profile { background: #f8f9fa; padding: 15px; border-radius: 4px; line-height: 1.6; }
+        .price-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .price-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .price-card .label { font-size: 12px; color: #666; margin-bottom: 5px; }
+        .price-card .value { font-size: 20px; font-weight: bold; color: #333; }
+        .chart-container { margin: 15px 0; height: 300px; }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 14px;
+            overflow-x: auto;
+            display: block;
+        }
+        .data-table th, .data-table td {
+            padding: 8px 12px;
+            text-align: right;
+            border: 1px solid #ddd;
+            white-space: nowrap;
+        }
+        .data-table th { background: #f8f9fa; font-weight: 600; }
+        .data-table td:first-child, .data-table th:first-child {
+            text-align: left;
+            background: #f8f9fa;
+            font-weight: 500;
+            position: sticky;
+            left: 0;
+        }
+        .data-table tr:hover { background: #f5f5f5; }
+        .subtitle a { color: #007bff; text-decoration: none; }
+        .subtitle a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="search-box">
+            <input type="text" id="stockInput" placeholder="股票代號/名稱" />
+            <button id="searchBtn" onclick="generateReport()">產生報告</button>
+            <span id="status" class="status"></span>
+        </div>
+        <div id="reportContainer"></div>
+    </div>
+
+<script>
+// Taiwan Stock Report - Standalone Web Application
+const FINMIND_API = 'https://api.finmindtrade.com/api/v4/data';
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+function formatNumber(value, decimals = 2) {
+    if (value === null || value === undefined || value === '') return '-';
+    const num = parseFloat(value);
+    if (isNaN(num)) return '-';
+    return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+function formatDate(date) { return date.toISOString().split('T')[0]; }
+
+function convertRocYear(rocYearStr) {
+    const match = String(rocYearStr).match(/(\d+)/);
+    return match ? parseInt(match[1]) + 1911 : null;
+}
+
+async function fetchFinMind(dataset, stockId, startDate, endDate = null) {
+    const params = new URLSearchParams({ dataset, data_id: stockId, start_date: startDate });
+    if (endDate) params.append('end_date', endDate);
+
+    const response = await fetch(`${FINMIND_API}?${params}`);
+    const data = await response.json();
+    if (data.status !== 200) throw new Error(data.msg || 'API Error');
+    return data.data;
+}
+
+// Search stock by name and return stock_id
+async function searchStockByName(name) {
+    setStatus('搜尋股票中...');
+    try {
+        // Fetch all stock info (use a common stock as data_id to get the list)
+        const params = new URLSearchParams({ dataset: 'TaiwanStockInfo' });
+        const response = await fetch(`${FINMIND_API}?${params}`);
+        const data = await response.json();
+        if (data.status === 200 && data.data) {
+            // Search for matching stock name
+            const match = data.data.find(s => s.stock_name === name || s.stock_name.includes(name));
+            if (match) {
+                return match.stock_id;
+            }
+        }
+    } catch (e) { console.error('Error searching stock:', e); }
+    return null;
+}
+
+async function getStockInfo(stockId) {
+    setStatus('取得股票資訊...');
+    try {
+        const data = await fetchFinMind('TaiwanStockInfo', stockId, '2020-01-01');
+        if (data && data.length > 0) {
+            // Debug: log all available fields
+            console.log('TaiwanStockInfo all fields:', Object.keys(data[0]));
+            console.log('TaiwanStockInfo data:', data[0]);
+            return { stock_id: data[0].stock_id, stock_name: data[0].stock_name || stockId, industry: data[0].industry_category || 'N/A' };
+        }
+    } catch (e) { console.error('Error fetching stock info:', e); }
+    return { stock_id: stockId, stock_name: stockId, industry: 'N/A' };
+}
+
+async function getPriceSummary(stockId) {
+    setStatus('取得股價資料...');
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 60);
+    try {
+        const data = await fetchFinMind('TaiwanStockPrice', stockId, formatDate(startDate), formatDate(endDate));
+        if (data && data.length > 0) {
+            const recent = data.slice(-30);
+            const closes = recent.map(d => d.close);
+            const highs = recent.map(d => d.max);
+            const lows = recent.map(d => d.min);
+            const volumes = recent.map(d => d.Trading_Volume);
+            return {
+                current: closes[closes.length - 1],
+                high: Math.max(...highs),
+                low: Math.min(...lows),
+                avg: closes.reduce((a, b) => a + b, 0) / closes.length,
+                volume: volumes.reduce((a, b) => a + b, 0) / volumes.length
+            };
+        }
+    } catch (e) { console.error('Error fetching price summary:', e); }
+    return null;
+}
+
+async function getMonthlyPrices10Y(stockId) {
+    setStatus('取得十年股價歷史...');
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - 10);
+    try {
+        const data = await fetchFinMind('TaiwanStockPrice', stockId, formatDate(startDate), formatDate(endDate));
+        if (data && data.length > 0) {
+            const monthlyData = {};
+            data.forEach(d => {
+                const month = d.date.substring(0, 7);
+                if (!monthlyData[month]) monthlyData[month] = [];
+                monthlyData[month].push(d.close);
+            });
+            const labels = Object.keys(monthlyData).sort();
+            const prices = labels.map(m => {
+                const vals = monthlyData[m];
+                return vals.reduce((a, b) => a + b, 0) / vals.length;
+            });
+            return { labels, prices };
+        }
+    } catch (e) { console.error('Error fetching monthly prices:', e); }
+    return null;
+}
+
+async function get10YKeyData(stockId) {
+    setStatus('取得財務資料...');
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - 10);
+    const startStr = formatDate(startDate);
+
+    const result = {
+        years: [],
+        year_end_price: {},
+        eps: {},
+        pe_ratio: {},
+        gross_margin: {},
+        annual_revenue: {},
+        cash_dividend: {},
+        stock_dividend: {},
+        cash_flow: {},
+        debt_ratio: {},
+        current_ratio: {}
+    };
+
+    try {
+        // 1. Year-end prices
+        setStatus('取得年底股價...');
+        const priceData = await fetchFinMind('TaiwanStockPrice', stockId, startStr);
+        if (priceData && priceData.length > 0) {
+            const yearlyPrices = {};
+            priceData.forEach(d => {
+                const year = parseInt(d.date.substring(0, 4));
+                yearlyPrices[year] = d.close;
+            });
+            Object.assign(result.year_end_price, yearlyPrices);
+        }
+
+        // 2. Financial statements (EPS, Gross Margin)
+        setStatus('取得財務報表...');
+        const finData = await fetchFinMind('TaiwanStockFinancialStatements', stockId, startStr);
+        if (finData && finData.length > 0) {
+            const epsData = finData.filter(d => d.type === 'EPS');
+            const epsYearly = {};
+            epsData.forEach(d => {
+                const year = parseInt(d.date.substring(0, 4));
+                epsYearly[year] = (epsYearly[year] || 0) + parseFloat(d.value);
+            });
+            Object.keys(epsYearly).forEach(y => {
+                result.eps[parseInt(y)] = parseFloat(epsYearly[y].toFixed(2));
+            });
+
+            const grossProfitData = finData.filter(d => d.type.includes('GrossProfit') || d.type.includes('營業毛利') || d.type.includes('毛利'));
+            const revenueData = finData.filter(d => d.type.includes('Revenue') || d.type.includes('營業收入') || d.type.includes('營收'));
+            if (grossProfitData.length > 0 && revenueData.length > 0) {
+                const gpYearly = {}, revYearly = {};
+                grossProfitData.forEach(d => { const y = parseInt(d.date.substring(0, 4)); gpYearly[y] = (gpYearly[y] || 0) + parseFloat(d.value); });
+                revenueData.forEach(d => { const y = parseInt(d.date.substring(0, 4)); revYearly[y] = (revYearly[y] || 0) + parseFloat(d.value); });
+                Object.keys(gpYearly).forEach(y => {
+                    if (revYearly[y] && revYearly[y] !== 0) result.gross_margin[parseInt(y)] = parseFloat(((gpYearly[y] / revYearly[y]) * 100).toFixed(2));
+                });
+            }
+        }
+
+        // 3. Monthly Revenue
+        setStatus('取得營收資料...');
+        const revData = await fetchFinMind('TaiwanStockMonthRevenue', stockId, startStr);
+        if (revData && revData.length > 0) {
+            const revYearly = {};
+            revData.forEach(d => { const y = parseInt(d.date.substring(0, 4)); revYearly[y] = (revYearly[y] || 0) + parseFloat(d.revenue); });
+            Object.keys(revYearly).forEach(y => { result.annual_revenue[parseInt(y)] = parseFloat((revYearly[y] / 100000000).toFixed(2)); });
+        }
+
+        // 4. Dividends
+        setStatus('取得股利資料...');
+        const divData = await fetchFinMind('TaiwanStockDividend', stockId, startStr);
+        if (divData && divData.length > 0) {
+            divData.forEach(d => {
+                let year = d.year ? convertRocYear(String(d.year)) : (d.date ? parseInt(d.date.substring(0, 4)) : null);
+                if (year) {
+                    const cashDiv = parseFloat(d.CashEarningsDistribution || d.cash_dividend || 0) + parseFloat(d.CashStatutorySurplus || 0);
+                    const stockDiv = parseFloat(d.StockEarningsDistribution || d.stock_dividend || 0) + parseFloat(d.StockStatutorySurplus || 0);
+                    result.cash_dividend[year] = (result.cash_dividend[year] || 0) + cashDiv;
+                    result.stock_dividend[year] = (result.stock_dividend[year] || 0) + stockDiv;
+                }
+            });
+            Object.keys(result.cash_dividend).forEach(y => { result.cash_dividend[y] = parseFloat(result.cash_dividend[y].toFixed(2)); });
+            Object.keys(result.stock_dividend).forEach(y => { result.stock_dividend[y] = parseFloat(result.stock_dividend[y].toFixed(2)); });
+        }
+
+        // 5. Cash Flow
+        setStatus('取得現金流量...');
+        const cfData = await fetchFinMind('TaiwanStockCashFlowsStatement', stockId, startStr);
+        if (cfData && cfData.length > 0) {
+            const cfFiltered = cfData.filter(d => d.type === 'CashFlowsFromOperatingActivities' || d.type.includes('營業活動'));
+            const cfYearly = {};
+            cfFiltered.forEach(d => { const y = parseInt(d.date.substring(0, 4)); cfYearly[y] = (cfYearly[y] || 0) + parseFloat(d.value); });
+            Object.keys(cfYearly).forEach(y => { result.cash_flow[parseInt(y)] = parseFloat((cfYearly[y] / 100000000).toFixed(2)); });
+        }
+
+        // 6. Balance Sheet
+        setStatus('取得資產負債表...');
+        const bsData = await fetchFinMind('TaiwanStockBalanceSheet', stockId, startStr);
+        if (bsData && bsData.length > 0) {
+            bsData.sort((a, b) => a.date.localeCompare(b.date));
+            const getYearlyLast = (data, typeNames) => {
+                for (const typeName of typeNames) {
+                    const filtered = data.filter(d => d.type === typeName);
+                    if (filtered.length > 0) {
+                        const yearly = {};
+                        filtered.forEach(d => { yearly[parseInt(d.date.substring(0, 4))] = parseFloat(d.value); });
+                        return yearly;
+                    }
+                }
+                return {};
+            };
+            const liabilities = getYearlyLast(bsData, ['Liabilities', 'TotalLiabilities', '負債總計', '負債總額']);
+            const assets = getYearlyLast(bsData, ['Assets', 'TotalAssets', '資產總計', '資產總額']);
+            const currentAssets = getYearlyLast(bsData, ['CurrentAssets', '流動資產合計', '流動資產總計', '流動資產']);
+            const currentLiab = getYearlyLast(bsData, ['CurrentLiabilities', '流動負債合計', '流動負債總計', '流動負債']);
+
+            Object.keys(liabilities).forEach(y => { if (assets[y] && assets[y] !== 0) result.debt_ratio[parseInt(y)] = parseFloat(((liabilities[y] / assets[y]) * 100).toFixed(2)); });
+            Object.keys(currentAssets).forEach(y => { if (currentLiab[y] && currentLiab[y] !== 0) result.current_ratio[parseInt(y)] = parseFloat((currentAssets[y] / currentLiab[y]).toFixed(2)); });
+        }
+
+        // P/E Ratio
+        Object.keys(result.year_end_price).forEach(y => {
+            const year = parseInt(y);
+            if (result.eps[year] && result.eps[year] !== 0) result.pe_ratio[year] = parseFloat((result.year_end_price[year] / result.eps[year]).toFixed(2));
+        });
+
+        // Collect all years
+        const allYears = new Set();
+        Object.keys(result).forEach(key => {
+            if (key !== 'years' && typeof result[key] === 'object') Object.keys(result[key]).forEach(y => allYears.add(parseInt(y)));
+        });
+        result.years = Array.from(allYears).sort((a, b) => a - b);
+
+    } catch (e) { console.error('Error fetching key data:', e); }
+    return result;
+}
+
+function renderReport(data) {
+    const { info, priceSummary, monthlyPrices, keyData } = data;
+
+    let html = `
+        <div class="report">
+            <h1>${info.stock_name} (${info.stock_id})</h1>
+            <div class="subtitle">產業: ${info.industry} | <a href="https://tw.stock.yahoo.com/quote/${info.stock_id}.TW" target="_blank">Yahoo 股市</a> | <a href="https://goodinfo.tw/tw/BasicInfo.asp?STOCK_ID=${info.stock_id}" target="_blank">Goodinfo</a> | 報告產生時間: ${new Date().toLocaleString()}</div>
+    `;
+
+    if (priceSummary) {
+        html += `
+            <h2>30日股價摘要</h2>
+            <div class="price-summary">
+                <div class="price-card"><div class="label">目前股價</div><div class="value">${formatNumber(priceSummary.current)}</div></div>
+                <div class="price-card"><div class="label">30日最高</div><div class="value">${formatNumber(priceSummary.high)}</div></div>
+                <div class="price-card"><div class="label">30日最低</div><div class="value">${formatNumber(priceSummary.low)}</div></div>
+                <div class="price-card"><div class="label">30日均價</div><div class="value">${formatNumber(priceSummary.avg)}</div></div>
+                <div class="price-card"><div class="label">平均成交量</div><div class="value">${formatNumber(priceSummary.volume / 1000, 0)}K</div></div>
+            </div>
+        `;
+    }
+
+    html += `
+        <h2>十年股價走勢</h2>
+        <div class="chart-container"><canvas id="priceChart"></canvas></div>
+    `;
+
+    if (keyData && keyData.years.length > 0) {
+        const years = keyData.years;
+        html += `
+            <h2>十年關鍵財務數據</h2>
+            <table class="data-table">
+                <thead><tr><th>指標</th>${years.map(y => `<th>${y}</th>`).join('')}</tr></thead>
+                <tbody>
+        `;
+        const metrics = [
+            { label: '年底股價 (元)', key: 'year_end_price' },
+            { label: '每股盈餘 (元)', key: 'eps' },
+            { label: '本益比', key: 'pe_ratio' },
+            { label: '毛利率 (%)', key: 'gross_margin' },
+            { label: '年營收 (億元)', key: 'annual_revenue' },
+            { label: '現金股利 (元)', key: 'cash_dividend' },
+            { label: '股票股利', key: 'stock_dividend' },
+            { label: '營業現金流 (億元)', key: 'cash_flow' },
+            { label: '負債比率 (%)', key: 'debt_ratio' },
+            { label: '流動比率', key: 'current_ratio' }
+        ];
+        metrics.forEach(m => {
+            html += `<tr><td>${m.label}</td>`;
+            years.forEach(y => { html += `<td>${formatNumber(keyData[m.key][y])}</td>`; });
+            html += `</tr>`;
+        });
+        html += `</tbody></table>`;
+    }
+
+    html += `</div>`;
+    document.getElementById('reportContainer').innerHTML = html;
+
+    if (monthlyPrices) {
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: monthlyPrices.labels,
+                datasets: [{
+                    label: '月均價 (元)',
+                    data: monthlyPrices.prices,
+                    borderColor: '#007bff',
+                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                    fill: true,
+                    tension: 0.1,
+                    pointRadius: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { display: true, ticks: { maxTicksLimit: 10 } },
+                    y: { display: true, title: { display: true, text: '股價 (元)' } }
+                }
+            }
+        });
+    }
+}
+
+async function generateReport() {
+    let stockInput = document.getElementById('stockInput').value.trim();
+    if (!stockInput) { alert('請輸入股票代號或名稱'); return; }
+
+    const btn = document.getElementById('searchBtn');
+    btn.disabled = true;
+    document.getElementById('reportContainer').innerHTML = '<div class="loading">載入報告中...</div>';
+
+    try {
+        // Check if input is a stock number (digits only) or a name
+        let stockId = stockInput;
+        if (!/^\d+$/.test(stockInput)) {
+            // Input is a name, search for stock ID
+            const foundId = await searchStockByName(stockInput);
+            if (!foundId) {
+                throw new Error(`找不到股票: ${stockInput}`);
+            }
+            stockId = foundId;
+        }
+
+        const info = await getStockInfo(stockId);
+        const priceSummary = await getPriceSummary(stockId);
+        const monthlyPrices = await getMonthlyPrices10Y(stockId);
+        const keyData = await get10YKeyData(stockId);
+
+        setStatus('產生報告中...');
+        renderReport({ info, priceSummary, monthlyPrices, keyData });
+        setStatus('報告產生完成!');
+    } catch (error) {
+        console.error('Error generating report:', error);
+        document.getElementById('reportContainer').innerHTML = `<div class="error">產生報告時發生錯誤: ${error.message}</div>`;
+        setStatus('錯誤');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+document.getElementById('stockInput').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') generateReport();
+});
+</script>
+</body>
+</html>
