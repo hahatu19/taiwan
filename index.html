@@ -107,7 +107,7 @@
     <div class="container">
         <div class="search-box">
             <input type="text" id="stockInput" placeholder="股票代號/名稱" />
-            <button id="searchBtn" onclick="generateReport()">產生報告</button>
+            <button id="searchBtn" onclick="generateReport()">股票查詢</button>
             <span id="status" class="status"></span>
         </div>
         <div id="reportContainer"></div>
@@ -242,6 +242,7 @@ async function get10YKeyData(stockId) {
         annual_revenue: {},
         cash_dividend: {},
         stock_dividend: {},
+        dividend_yield: {},
         cash_flow: {},
         debt_ratio: {},
         current_ratio: {}
@@ -353,6 +354,16 @@ async function get10YKeyData(stockId) {
             if (result.eps[year] && result.eps[year] !== 0) result.pe_ratio[year] = parseFloat((result.year_end_price[year] / result.eps[year]).toFixed(2));
         });
 
+        // Dividend Yield (殖利率) = (Cash Dividend + Stock Dividend) / Year-End Price * 100
+        const allDivYears = new Set([...Object.keys(result.cash_dividend), ...Object.keys(result.stock_dividend)]);
+        allDivYears.forEach(y => {
+            const year = parseInt(y);
+            if (result.year_end_price[year] && result.year_end_price[year] !== 0) {
+                const totalDiv = (result.cash_dividend[year] || 0) + (result.stock_dividend[year] || 0);
+                result.dividend_yield[year] = parseFloat((totalDiv / result.year_end_price[year] * 100).toFixed(2));
+            }
+        });
+
         // Collect all years
         const allYears = new Set();
         Object.keys(result).forEach(key => {
@@ -407,6 +418,7 @@ function renderReport(data) {
             { label: '年營收 (億元)', key: 'annual_revenue' },
             { label: '現金股利 (元)', key: 'cash_dividend' },
             { label: '股票股利', key: 'stock_dividend' },
+            { label: '殖利率 (%)', key: 'dividend_yield' },
             { label: '營業現金流 (億元)', key: 'cash_flow' },
             { label: '負債比率 (%)', key: 'debt_ratio' },
             { label: '流動比率', key: 'current_ratio' }
@@ -424,6 +436,67 @@ function renderReport(data) {
 
     if (monthlyPrices) {
         const ctx = document.getElementById('priceChart').getContext('2d');
+
+        // Crosshair plugin - draws vertical line with price at top and date at bottom
+        const crosshairPlugin = {
+            id: 'crosshair',
+            afterDraw(chart) {
+                if (chart._crosshairX == null) return;
+                const drawCtx = chart.ctx;
+                const xAxis = chart.scales.x;
+                const yAxis = chart.scales.y;
+
+                // Find nearest data point
+                const xValue = xAxis.getValueForPixel(chart._crosshairX);
+                const index = Math.round(xValue);
+                if (index < 0 || index >= chart.data.labels.length) return;
+                const label = chart.data.labels[index];
+                const price = chart.data.datasets[0].data[index];
+                const snapX = xAxis.getPixelForValue(index);
+
+                // Draw vertical line
+                drawCtx.save();
+                drawCtx.beginPath();
+                drawCtx.moveTo(snapX, yAxis.top);
+                drawCtx.lineTo(snapX, yAxis.bottom);
+                drawCtx.lineWidth = 1;
+                drawCtx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+                drawCtx.setLineDash([4, 4]);
+                drawCtx.stroke();
+
+                // Draw price label at top
+                drawCtx.setLineDash([]);
+                drawCtx.font = 'bold 12px sans-serif';
+                drawCtx.textAlign = 'center';
+                const priceText = price.toFixed(2) + ' 元';
+                const priceWidth = drawCtx.measureText(priceText).width + 10;
+                drawCtx.fillStyle = 'rgba(0, 123, 255, 0.85)';
+                const priceY = yAxis.top + (yAxis.bottom - yAxis.top) / 3;
+                drawCtx.fillRect(snapX - priceWidth / 2, priceY - 9, priceWidth, 18);
+                drawCtx.fillStyle = '#fff';
+                drawCtx.fillText(priceText, snapX, priceY + 5);
+
+                // Draw date label at bottom
+                const dateWidth = drawCtx.measureText(label).width + 10;
+                drawCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                drawCtx.fillRect(snapX - dateWidth / 2, yAxis.bottom + 4, dateWidth, 18);
+                drawCtx.fillStyle = '#fff';
+                drawCtx.fillText(label, snapX, yAxis.bottom + 18);
+
+                drawCtx.restore();
+            },
+            afterEvent(chart, args) {
+                const event = args.event;
+                if (event.type === 'mousemove') {
+                    chart._crosshairX = event.x;
+                    chart.draw();
+                } else if (event.type === 'mouseout') {
+                    chart._crosshairX = null;
+                    chart.draw();
+                }
+            }
+        };
+
         new Chart(ctx, {
             type: 'line',
             data: {
@@ -435,18 +508,28 @@ function renderReport(data) {
                     backgroundColor: 'rgba(0, 123, 255, 0.1)',
                     fill: true,
                     tension: 0.1,
-                    pointRadius: 0
+                    pointRadius: 0,
+                    pointHoverRadius: 6,
+                    pointHoverBackgroundColor: '#007bff'
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { enabled: false }
+                },
                 scales: {
                     x: { display: true, ticks: { maxTicksLimit: 10 } },
                     y: { display: true, title: { display: true, text: '股價 (元)' } }
                 }
-            }
+            },
+            plugins: [crosshairPlugin]
         });
     }
 }
@@ -476,12 +559,12 @@ async function generateReport() {
         const monthlyPrices = await getMonthlyPrices10Y(stockId);
         const keyData = await get10YKeyData(stockId);
 
-        setStatus('產生報告中...');
+        setStatus('股票查詢中...');
         renderReport({ info, priceSummary, monthlyPrices, keyData });
         setStatus('報告產生完成!');
     } catch (error) {
         console.error('Error generating report:', error);
-        document.getElementById('reportContainer').innerHTML = `<div class="error">產生報告時發生錯誤: ${error.message}</div>`;
+        document.getElementById('reportContainer').innerHTML = `<div class="error">股票查詢時發生錯誤: ${error.message}</div>`;
         setStatus('錯誤');
     } finally {
         btn.disabled = false;
