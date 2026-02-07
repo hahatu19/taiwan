@@ -464,24 +464,31 @@ function renderReport(data) {
                 drawCtx.setLineDash([4, 4]);
                 drawCtx.stroke();
 
-                // Draw price label at top
+                // Draw price label at 1/3 from top
                 drawCtx.setLineDash([]);
                 drawCtx.font = 'bold 12px sans-serif';
-                drawCtx.textAlign = 'center';
                 const priceText = price.toFixed(2) + ' 元';
                 const priceWidth = drawCtx.measureText(priceText).width + 10;
-                drawCtx.fillStyle = 'rgba(0, 123, 255, 0.85)';
                 const priceY = yAxis.top + (yAxis.bottom - yAxis.top) / 3;
-                drawCtx.fillRect(snapX - priceWidth / 2, priceY - 9, priceWidth, 18);
+                // Clamp horizontally so label stays within chart area
+                let priceLabelX = snapX - priceWidth / 2;
+                if (priceLabelX + priceWidth > xAxis.right) priceLabelX = xAxis.right - priceWidth;
+                if (priceLabelX < xAxis.left) priceLabelX = xAxis.left;
+                drawCtx.fillStyle = 'rgba(0, 123, 255, 0.85)';
+                drawCtx.fillRect(priceLabelX, priceY - 9, priceWidth, 18);
                 drawCtx.fillStyle = '#fff';
-                drawCtx.fillText(priceText, snapX, priceY + 5);
+                drawCtx.textAlign = 'left';
+                drawCtx.fillText(priceText, priceLabelX + 5, priceY + 5);
 
                 // Draw date label at bottom
                 const dateWidth = drawCtx.measureText(label).width + 10;
+                let dateLabelX = snapX - dateWidth / 2;
+                if (dateLabelX + dateWidth > xAxis.right) dateLabelX = xAxis.right - dateWidth;
+                if (dateLabelX < xAxis.left) dateLabelX = xAxis.left;
                 drawCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                drawCtx.fillRect(snapX - dateWidth / 2, yAxis.bottom + 4, dateWidth, 18);
+                drawCtx.fillRect(dateLabelX, yAxis.bottom + 4, dateWidth, 18);
                 drawCtx.fillStyle = '#fff';
-                drawCtx.fillText(label, snapX, yAxis.bottom + 18);
+                drawCtx.fillText(label, dateLabelX + 5, yAxis.bottom + 18);
 
                 drawCtx.restore();
             },
