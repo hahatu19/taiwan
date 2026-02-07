@@ -253,8 +253,10 @@ async function get10YKeyData(stockId) {
         setStatus('取得年底股價...');
         const priceData = await fetchFinMind('TaiwanStockPrice', stockId, startStr);
         if (priceData && priceData.length > 0) {
+            // Sort by date and skip entries with 0 close price
+            const sorted = priceData.filter(d => d.close > 0).sort((a, b) => a.date.localeCompare(b.date));
             const yearlyPrices = {};
-            priceData.forEach(d => {
+            sorted.forEach(d => {
                 const year = parseInt(d.date.substring(0, 4));
                 yearlyPrices[year] = d.close;
             });
