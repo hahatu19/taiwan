@@ -101,6 +101,16 @@
         .data-table tr:hover { background: #f5f5f5; }
         .subtitle a { color: #007bff; text-decoration: none; }
         .subtitle a:hover { text-decoration: underline; }
+        .select-btn {
+            padding: 4px 12px;
+            font-size: 13px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .select-btn:hover { background: #0056b3; }
     </style>
 </head>
 <body>
@@ -137,29 +147,66 @@ async function fetchFinMind(dataset, stockId, startDate, endDate = null) {
     const params = new URLSearchParams({ dataset, data_id: stockId, start_date: startDate });
     if (endDate) params.append('end_date', endDate);
 
-    const response = await fetch(`${FINMIND_API}?${params}`);
+    const url = `${FINMIND_API}?${params}`;
+    console.log(`API call: ${url}`);
+    const response = await fetch(url);
     const data = await response.json();
+    console.log(`${dataset}: ${data.data ? data.data.length : 0} rows, msg: ${data.msg || 'ok'}`);
+    if (data.data && data.data.length > 0) {
+        const dates = data.data.map(d => d.date).filter(Boolean);
+        console.log(`  date range: ${dates[0]} ~ ${dates[dates.length - 1]}`);
+    }
     if (data.status !== 200) throw new Error(data.msg || 'API Error');
     return data.data;
 }
 
-// Search stock by name and return stock_id
+// Search stock by name and return all matches
 async function searchStockByName(name) {
     setStatus('搜尋股票中...');
     try {
-        // Fetch all stock info (use a common stock as data_id to get the list)
         const params = new URLSearchParams({ dataset: 'TaiwanStockInfo' });
         const response = await fetch(`${FINMIND_API}?${params}`);
         const data = await response.json();
         if (data.status === 200 && data.data) {
-            // Search for matching stock name
-            const match = data.data.find(s => s.stock_name === name || s.stock_name.includes(name));
-            if (match) {
-                return match.stock_id;
-            }
+            const matches = data.data.filter(s => s.stock_name && s.stock_name.includes(name));
+            // Deduplicate by stock_id
+            const seen = new Set();
+            const unique = [];
+            matches.forEach(s => {
+                if (!seen.has(s.stock_id)) {
+                    seen.add(s.stock_id);
+                    unique.push({ stock_id: s.stock_id, stock_name: s.stock_name, industry: s.industry_category || '' });
+                }
+            });
+            return unique;
         }
     } catch (e) { console.error('Error searching stock:', e); }
-    return null;
+    return [];
+}
+
+// Show match list for user to select
+function showMatchList(matches) {
+    let html = `<div class="report">
+        <h2>搜尋結果 (${matches.length} 筆)</h2>
+        <table class="data-table" style="display:table">
+            <thead><tr><th>代號</th><th>名稱</th><th>產業</th><th></th></tr></thead>
+            <tbody>`;
+    matches.forEach(m => {
+        html += `<tr>
+            <td style="background:none">${m.stock_id}</td>
+            <td style="background:none">${m.stock_name}</td>
+            <td style="background:none">${m.industry}</td>
+            <td style="background:none"><button class="select-btn" onclick="selectStock('${m.stock_id}')">查詢</button></td>
+        </tr>`;
+    });
+    html += `</tbody></table></div>`;
+    document.getElementById('reportContainer').innerHTML = html;
+}
+
+// Generate report for a selected stock
+function selectStock(stockId) {
+    document.getElementById('stockInput').value = stockId;
+    generateReport();
 }
 
 async function getStockInfo(stockId) {
@@ -207,15 +254,23 @@ async function getMonthlyPrices10Y(stockId) {
     const startDate = new Date();
     startDate.setFullYear(startDate.getFullYear() - 10);
     try {
-        const data = await fetchFinMind('TaiwanStockPrice', stockId, formatDate(startDate), formatDate(endDate));
-        if (data && data.length > 0) {
-            const monthlyData = {};
-            data.forEach(d => {
-                const month = d.date.substring(0, 7);
-                if (!monthlyData[month]) monthlyData[month] = [];
-                monthlyData[month].push(d.close);
-            });
-            const labels = Object.keys(monthlyData).sort();
+        // Fetch in 2-year chunks to avoid row limit
+        const monthlyData = {};
+        for (let y = startDate.getFullYear(); y <= endDate.getFullYear(); y += 2) {
+            const chunkStart = `${y}-01-01`;
+            const chunkEnd = `${Math.min(y + 1, endDate.getFullYear())}-12-31`;
+            setStatus(`取得股價歷史 ${y}-${Math.min(y + 1, endDate.getFullYear())}...`);
+            const data = await fetchFinMind('TaiwanStockPrice', stockId, chunkStart, chunkEnd);
+            if (data && data.length > 0) {
+                data.filter(d => d.close > 0).forEach(d => {
+                    const month = d.date.substring(0, 7);
+                    if (!monthlyData[month]) monthlyData[month] = [];
+                    monthlyData[month].push(d.close);
+                });
+            }
+        }
+        const labels = Object.keys(monthlyData).sort();
+        if (labels.length > 0) {
             const prices = labels.map(m => {
                 const vals = monthlyData[m];
                 return vals.reduce((a, b) => a + b, 0) / vals.length;
@@ -232,6 +287,7 @@ async function get10YKeyData(stockId) {
     const startDate = new Date();
     startDate.setFullYear(startDate.getFullYear() - 10);
     const startStr = formatDate(startDate);
+    const endStr = formatDate(endDate);
 
     const result = {
         years: [],
@@ -249,23 +305,27 @@ async function get10YKeyData(stockId) {
     };
 
     try {
-        // 1. Year-end prices
+        // 1. Year-end prices - fetch in 2-year chunks to avoid row limit
         setStatus('取得年底股價...');
-        const priceData = await fetchFinMind('TaiwanStockPrice', stockId, startStr);
-        if (priceData && priceData.length > 0) {
-            // Sort by date and skip entries with 0 close price
-            const sorted = priceData.filter(d => d.close > 0).sort((a, b) => a.date.localeCompare(b.date));
-            const yearlyPrices = {};
-            sorted.forEach(d => {
-                const year = parseInt(d.date.substring(0, 4));
-                yearlyPrices[year] = d.close;
-            });
-            Object.assign(result.year_end_price, yearlyPrices);
+        const yearlyPrices = {};
+        for (let y = startDate.getFullYear(); y <= endDate.getFullYear(); y += 2) {
+            const chunkStart = `${y}-01-01`;
+            const chunkEnd = `${Math.min(y + 1, endDate.getFullYear())}-12-31`;
+            setStatus(`取得股價 ${y}-${Math.min(y + 1, endDate.getFullYear())}...`);
+            const priceData = await fetchFinMind('TaiwanStockPrice', stockId, chunkStart, chunkEnd);
+            if (priceData && priceData.length > 0) {
+                const sorted = priceData.filter(d => d.close > 0).sort((a, b) => a.date.localeCompare(b.date));
+                sorted.forEach(d => {
+                    const yr = parseInt(d.date.substring(0, 4));
+                    yearlyPrices[yr] = d.close;
+                });
+            }
         }
+        Object.assign(result.year_end_price, yearlyPrices);
 
         // 2. Financial statements (EPS, Gross Margin)
         setStatus('取得財務報表...');
-        const finData = await fetchFinMind('TaiwanStockFinancialStatements', stockId, startStr);
+        const finData = await fetchFinMind('TaiwanStockFinancialStatements', stockId, startStr, endStr);
         if (finData && finData.length > 0) {
             const epsData = finData.filter(d => d.type === 'EPS');
             const epsYearly = {};
@@ -291,7 +351,7 @@ async function get10YKeyData(stockId) {
 
         // 3. Monthly Revenue
         setStatus('取得營收資料...');
-        const revData = await fetchFinMind('TaiwanStockMonthRevenue', stockId, startStr);
+        const revData = await fetchFinMind('TaiwanStockMonthRevenue', stockId, startStr, endStr);
         if (revData && revData.length > 0) {
             const revYearly = {};
             revData.forEach(d => { const y = parseInt(d.date.substring(0, 4)); revYearly[y] = (revYearly[y] || 0) + parseFloat(d.revenue); });
@@ -300,7 +360,7 @@ async function get10YKeyData(stockId) {
 
         // 4. Dividends
         setStatus('取得股利資料...');
-        const divData = await fetchFinMind('TaiwanStockDividend', stockId, startStr);
+        const divData = await fetchFinMind('TaiwanStockDividend', stockId, startStr, endStr);
         if (divData && divData.length > 0) {
             divData.forEach(d => {
                 let year = d.year ? convertRocYear(String(d.year)) : (d.date ? parseInt(d.date.substring(0, 4)) : null);
@@ -317,7 +377,7 @@ async function get10YKeyData(stockId) {
 
         // 5. Cash Flow
         setStatus('取得現金流量...');
-        const cfData = await fetchFinMind('TaiwanStockCashFlowsStatement', stockId, startStr);
+        const cfData = await fetchFinMind('TaiwanStockCashFlowsStatement', stockId, startStr, endStr);
         if (cfData && cfData.length > 0) {
             const cfFiltered = cfData.filter(d => d.type === 'CashFlowsFromOperatingActivities' || d.type.includes('營業活動'));
             const cfYearly = {};
@@ -327,7 +387,7 @@ async function get10YKeyData(stockId) {
 
         // 6. Balance Sheet
         setStatus('取得資產負債表...');
-        const bsData = await fetchFinMind('TaiwanStockBalanceSheet', stockId, startStr);
+        const bsData = await fetchFinMind('TaiwanStockBalanceSheet', stockId, startStr, endStr);
         if (bsData && bsData.length > 0) {
             bsData.sort((a, b) => a.date.localeCompare(b.date));
             const getYearlyLast = (data, typeNames) => {
@@ -544,7 +604,8 @@ function renderReport(data) {
 }
 
 async function generateReport() {
-    let stockInput = document.getElementById('stockInput').value.trim();
+    let stockInput = document.getElementById('stockInput').value.trim().toUpperCase();
+    document.getElementById('stockInput').value = stockInput;
     if (!stockInput) { alert('請輸入股票代號或名稱'); return; }
 
     const btn = document.getElementById('searchBtn');
@@ -552,15 +613,23 @@ async function generateReport() {
     document.getElementById('reportContainer').innerHTML = '<div class="loading">載入報告中...</div>';
 
     try {
-        // Check if input is a stock number (digits only) or a name
+        // Check if input is a stock ID (digits, optionally followed by letters like 00981A)
+        // or a stock name (starts with Chinese characters)
         let stockId = stockInput;
-        if (!/^\d+$/.test(stockInput)) {
-            // Input is a name, search for stock ID
-            const foundId = await searchStockByName(stockInput);
-            if (!foundId) {
+        if (!/^\d+[A-Za-z]*$/.test(stockInput)) {
+            // Input is a name, search for matches
+            const matches = await searchStockByName(stockInput);
+            if (matches.length === 0) {
                 throw new Error(`找不到股票: ${stockInput}`);
+            } else if (matches.length === 1) {
+                stockId = matches[0].stock_id;
+            } else {
+                // Multiple matches - show list for user to select
+                showMatchList(matches);
+                setStatus(`找到 ${matches.length} 筆符合結果`);
+                btn.disabled = false;
+                return;
             }
-            stockId = foundId;
         }
 
         const info = await getStockInfo(stockId);
