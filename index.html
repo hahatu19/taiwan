@@ -42,6 +42,8 @@
         }
         .search-box button:hover { background: #0056b3; }
         .search-box button:disabled { background: #ccc; cursor: not-allowed; }
+        #etfBtn { background: #28a745; }
+        #etfBtn:hover { background: #1e7e34; }
         .loading { text-align: center; padding: 40px; color: #666; }
         .error { background: #fee; color: #c00; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
         .status { margin-left: 10px; color: #666; font-size: 14px; }
@@ -118,6 +120,7 @@
         <div class="search-box">
             <input type="text" id="stockInput" placeholder="股票代號/名稱" />
             <button id="searchBtn" onclick="generateReport()">股票查詢</button>
+            <button id="etfBtn" onclick="showDomesticETFs()">台灣成分股ETF</button>
             <span id="status" class="status"></span>
         </div>
         <div id="reportContainer"></div>
@@ -207,6 +210,115 @@ function showMatchList(matches) {
 function selectStock(stockId) {
     document.getElementById('stockInput').value = stockId;
     generateReport();
+}
+
+// Fetch and show domestic ETF list from TWSE
+async function showDomesticETFs() {
+    const btn = document.getElementById('etfBtn');
+    btn.disabled = true;
+    setStatus('取得ETF列表...');
+    document.getElementById('reportContainer').innerHTML = '<div class="loading">載入ETF列表中...</div>';
+
+    try {
+        // Fetch ETF list from TWSE ETFortune
+        let data = null;
+        const twseUrl = 'https://www.twse.com.tw/zh/ETFortune/ajaxProductsResult';
+        const proxies = [
+            url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+            url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            url => `https://cors-anywhere.herokuapp.com/${url}`
+        ];
+
+        // Try direct first
+        try {
+            const response = await fetch(twseUrl);
+            if (response.ok) {
+                const json = await response.json();
+                data = json.data || json;
+            }
+        } catch (e) {
+            console.log('Direct TWSE API failed:', e.message);
+        }
+
+        // Try proxies if direct failed
+        if (!data) {
+            for (const makeProxy of proxies) {
+                try {
+                    const proxyUrl = makeProxy(twseUrl);
+                    console.log('Trying proxy:', proxyUrl);
+                    setStatus('嘗試透過代理取得ETF列表...');
+                    const response = await fetch(proxyUrl);
+                    if (response.ok) {
+                        const text = await response.text();
+                        let parsed;
+                        try {
+                            const wrapped = JSON.parse(text);
+                            parsed = wrapped.contents ? JSON.parse(wrapped.contents) : wrapped;
+                        } catch {
+                            parsed = JSON.parse(text);
+                        }
+                        data = parsed.data || parsed;
+                        if (data) break;
+                    }
+                } catch (e) {
+                    console.log('Proxy failed:', e.message);
+                }
+            }
+        }
+
+        if (!data || data.length === 0) {
+            throw new Error('無法取得ETF資料');
+        }
+
+        // Filter for domestic Taiwan ETFs by checking name/index for Taiwan keywords
+        const twKeywords = ['臺灣', '台灣', '台股'];
+        const domesticETFs = data.filter(d => {
+            const name = d.stockName || '';
+            const idx = d.indexName || '';
+            return twKeywords.some(kw => name.includes(kw) || idx.includes(kw));
+        });
+        domesticETFs.sort((a, b) => (a.stockNo || '').localeCompare(b.stockNo || ''));
+
+        // Build selection table
+        let html = `<div class="report">
+            <h2>台灣成分股ETF (${domesticETFs.length} 檔)</h2>
+            <table class="data-table" style="display:table">
+                <thead><tr><th>代號</th><th>名稱</th><th>追蹤指數</th><th>上市日期</th><th></th></tr></thead>
+                <tbody>`;
+        domesticETFs.forEach(etf => {
+            const code = etf.stockNo || '';
+            const name = (etf.stockName || '').replace(/證券投資信託基金$/, '');
+            const index = etf.indexName || '';
+            const listDate = etf.listingDate || '';
+            html += `<tr>
+                <td style="background:none">${code}</td>
+                <td style="background:none">${name}</td>
+                <td style="background:none">${index}</td>
+                <td style="background:none">${listDate}</td>
+                <td style="background:none"><button class="select-btn" onclick="selectStock('${code}')">查詢</button></td>
+            </tr>`;
+        });
+        html += `</tbody></table></div>`;
+        document.getElementById('reportContainer').innerHTML = html;
+        setStatus(`找到 ${domesticETFs.length} 檔國內成分股ETF`);
+
+    } catch (error) {
+        console.error('Error fetching ETF list:', error);
+        document.getElementById('reportContainer').innerHTML = `<div class="error">取得ETF列表失敗: ${error.message}</div>`;
+        setStatus('錯誤');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// Open ETF basic info page on TWSE
+function showETFInfo(stockId) {
+    window.open(`https://www.twse.com.tw/zh/products/securities/etf/products/content.html?${stockId}#domestic`, '_blank');
+}
+
+// Open ETF holdings page on MoneyDJ
+function showETFHoldings(stockId) {
+    window.open(`https://www.moneydj.com/ETF/X/Basic/Basic0007B.xdjhtm?etfid=${stockId}.TW`, '_blank');
 }
 
 async function getStockInfo(stockId) {
@@ -443,7 +555,7 @@ function renderReport(data) {
     let html = `
         <div class="report">
             <h1>${info.stock_name} (${info.stock_id})</h1>
-            <div class="subtitle">產業: ${info.industry} | <a href="https://tw.stock.yahoo.com/quote/${info.stock_id}.TW" target="_blank">Yahoo 股市</a> | <a href="https://goodinfo.tw/tw/BasicInfo.asp?STOCK_ID=${info.stock_id}" target="_blank">Goodinfo</a> | 報告產生時間: ${new Date().toLocaleString()}</div>
+            <div class="subtitle">產業: ${info.industry} | <a href="https://tw.stock.yahoo.com/quote/${info.stock_id}.TW" target="_blank">Yahoo 股市</a> | <a href="https://goodinfo.tw/tw/BasicInfo.asp?STOCK_ID=${info.stock_id}" target="_blank">Goodinfo</a>${/^\d{4,}/.test(info.stock_id) && info.stock_id.length >= 4 ? ` | <button class="select-btn" onclick="showETFInfo('${info.stock_id}')">基本資料</button> | <button class="select-btn" onclick="showETFHoldings('${info.stock_id}')">成分股</button>` : ''} | 報告產生時間: ${new Date().toLocaleString()}</div>
     `;
 
     if (priceSummary) {
