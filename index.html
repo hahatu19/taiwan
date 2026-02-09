@@ -213,9 +213,41 @@ function selectStock(stockId) {
 }
 
 // Fetch and show domestic ETF list from TWSE
+let cachedDomesticETFs = null;
+
+function renderETFList(etfs) {
+    let html = `<div class="report">
+        <h2>台灣成分股ETF (${etfs.length} 檔)</h2>
+        <table style="border-collapse:collapse;margin:15px 0;font-size:14px">
+            <thead><tr><th style="padding:6px 10px;border:1px solid #ddd;background:#f8f9fa;white-space:nowrap">代號</th><th style="padding:6px 10px;border:1px solid #ddd;background:#f8f9fa;white-space:nowrap">名稱</th><th style="padding:6px 10px;border:1px solid #ddd;background:#f8f9fa;white-space:nowrap">追蹤指數</th><th style="padding:6px 10px;border:1px solid #ddd;background:#f8f9fa;white-space:nowrap">上市日期</th></tr></thead>
+            <tbody>`;
+    etfs.forEach(etf => {
+        const code = etf.stockNo || '';
+        const name = (etf.stockName || '').replace(/證券投資信託基金$/, '').replace(/\(.*?\)/g, '').trim();
+        const index = (etf.indexName || '').replace(/\(.*?\)/g, '').trim();
+        const listDate = etf.listingDate || '';
+        html += `<tr>
+            <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap"><a href="#" onclick="selectStock('${code}');return false;" style="color:#1a73e8;text-decoration:none;cursor:pointer">${code}</a></td>
+            <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap"><a href="#" onclick="selectStock('${code}');return false;" style="color:#1a73e8;text-decoration:none;cursor:pointer">${name}</a></td>
+            <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${index}</td>
+            <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${listDate}</td>
+        </tr>`;
+    });
+    html += `</tbody></table></div>`;
+    document.getElementById('reportContainer').innerHTML = html;
+    setStatus(`找到 ${etfs.length} 檔國內成分股ETF`);
+}
+
 async function showDomesticETFs() {
     const btn = document.getElementById('etfBtn');
     btn.disabled = true;
+
+    if (cachedDomesticETFs) {
+        renderETFList(cachedDomesticETFs);
+        btn.disabled = false;
+        return;
+    }
+
     setStatus('取得ETF列表...');
     document.getElementById('reportContainer').innerHTML = '<div class="loading">載入ETF列表中...</div>';
 
@@ -279,28 +311,8 @@ async function showDomesticETFs() {
         });
         domesticETFs.sort((a, b) => (a.stockNo || '').localeCompare(b.stockNo || ''));
 
-        // Build selection table
-        let html = `<div class="report">
-            <h2>台灣成分股ETF (${domesticETFs.length} 檔)</h2>
-            <table class="data-table" style="display:table">
-                <thead><tr><th>代號</th><th>名稱</th><th>追蹤指數</th><th>上市日期</th><th></th></tr></thead>
-                <tbody>`;
-        domesticETFs.forEach(etf => {
-            const code = etf.stockNo || '';
-            const name = (etf.stockName || '').replace(/證券投資信託基金$/, '');
-            const index = etf.indexName || '';
-            const listDate = etf.listingDate || '';
-            html += `<tr>
-                <td style="background:none">${code}</td>
-                <td style="background:none">${name}</td>
-                <td style="background:none">${index}</td>
-                <td style="background:none">${listDate}</td>
-                <td style="background:none"><button class="select-btn" onclick="selectStock('${code}')">查詢</button></td>
-            </tr>`;
-        });
-        html += `</tbody></table></div>`;
-        document.getElementById('reportContainer').innerHTML = html;
-        setStatus(`找到 ${domesticETFs.length} 檔國內成分股ETF`);
+        cachedDomesticETFs = domesticETFs;
+        renderETFList(domesticETFs);
 
     } catch (error) {
         console.error('Error fetching ETF list:', error);
