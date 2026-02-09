@@ -153,12 +153,19 @@ async function fetchFinMind(dataset, stockId, startDate, endDate = null) {
     const url = `${FINMIND_API}?${params}`;
     console.log(`API call: ${url}`);
     const response = await fetch(url);
+    if (!response.ok) {
+        console.log(`HTTP error: ${response.status}`);
+        if (response.status === 402 || response.status === 429) throw new Error('API 請求次數已達上限，請稍後再試');
+        throw new Error(`API 連線錯誤 (HTTP ${response.status})`);
+    }
     const data = await response.json();
     console.log(`${dataset}: ${data.data ? data.data.length : 0} rows, msg: ${data.msg || 'ok'}`);
     if (data.data && data.data.length > 0) {
         const dates = data.data.map(d => d.date).filter(Boolean);
         console.log(`  date range: ${dates[0]} ~ ${dates[dates.length - 1]}`);
     }
+    if (data.status === 402) throw new Error('API 請求次數已達上限，請稍後再試');
+    if (data.msg && data.msg.includes('upper limit')) throw new Error('API 請求次數已達上限，請稍後再試');
     if (data.status !== 200) throw new Error(data.msg || 'API Error');
     return data.data;
 }
@@ -762,6 +769,10 @@ async function generateReport() {
         const priceSummary = await getPriceSummary(stockId);
         const monthlyPrices = await getMonthlyPrices10Y(stockId);
         const keyData = await get10YKeyData(stockId);
+
+        if (!priceSummary && !monthlyPrices && (!keyData || !keyData.years || keyData.years.length === 0)) {
+            throw new Error(`查無 ${stockId} 的資料，可能為新上市或 FinMind 尚未收錄`);
+        }
 
         setStatus('股票查詢中...');
         renderReport({ info, priceSummary, monthlyPrices, keyData });
