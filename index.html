@@ -576,7 +576,7 @@ function renderReport(data) {
     let html = `
         <div class="report">
             <h1>${info.stock_name} (${info.stock_id})</h1>
-            <div class="subtitle">產業: ${info.industry} | <a href="https://tw.stock.yahoo.com/quote/${info.stock_id}.TW" target="_blank">Yahoo 股市</a> | <a href="https://goodinfo.tw/tw/BasicInfo.asp?STOCK_ID=${info.stock_id}" target="_blank">Goodinfo</a>${/^\d{4,}/.test(info.stock_id) && info.stock_id.length >= 4 ? ` | <button class="select-btn" onclick="showETFInfo('${info.stock_id}')">基本資料</button> | <button class="select-btn" onclick="showETFHoldings('${info.stock_id}')">成分股</button>` : ''} | 報告產生時間: ${new Date().toLocaleString()}</div>
+            <div class="subtitle">產業: ${info.industry} | <a href="https://tw.stock.yahoo.com/quote/${info.stock_id}.TW" target="_blank">Yahoo 股市</a> | <a href="https://goodinfo.tw/tw/BasicInfo.asp?STOCK_ID=${info.stock_id}" target="_blank">Goodinfo</a>${info.stock_id.startsWith('00') ? ` | <button class="select-btn" onclick="showETFInfo('${info.stock_id}')">基本資料</button> | <button class="select-btn" onclick="showETFHoldings('${info.stock_id}')">成分股</button>` : ''} | 報告產生時間: ${new Date().toLocaleString()}</div>
     `;
 
     if (priceSummary) {
