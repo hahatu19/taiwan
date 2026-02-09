@@ -720,7 +720,7 @@ function renderReport(data) {
                     tooltip: { enabled: false }
                 },
                 scales: {
-                    x: { display: true, ticks: { maxTicksLimit: 10 } },
+                    x: { display: true, ticks: { callback: function(val, idx) { const label = this.getLabelForValue(val); return label.endsWith('-01') ? label.substring(0, 4) : null; } } },
                     y: { display: true, title: { display: true, text: '股價 (元)' } }
                 }
             },
