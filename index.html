@@ -307,6 +307,8 @@ async function showDomesticETFs() {
         const domesticETFs = data.filter(d => {
             const name = d.stockName || '';
             const idx = d.indexName || '';
+            const code = d.stockNo || '';
+            if (/[LRT]$/.test(code)) return false;
             return twKeywords.some(kw => name.includes(kw) || idx.includes(kw));
         });
         domesticETFs.sort((a, b) => (a.stockNo || '').localeCompare(b.stockNo || ''));
